@@ -5,7 +5,7 @@ import time
 import multiprocessing
 from typing import List, Dict, Tuple, Iterable, Iterator
 from tqdm import tqdm
-from cs336_basics.train_bpe import * # Import only what we need
+from cs336_basics_mine.train_bpe import * # Import only what we need
 import psutil
 import regex as re
 import numpy as np
@@ -71,7 +71,7 @@ class Tokenizer:
         if use_parallel:
             # use parallelized pretokenization for large files
             self.logger.info("Starting parallel pretokenization...")
-            from cs336_basics.train_bpe import read_txt_file
+            from cs336_basics_mine.train_bpe import read_txt_file
             pretoken_freq = read_txt_file(input_path, self.max_workers, self.special_tokens)
             self.logger.info(f"Found {len(pretoken_freq)} unique pretokens")
             

@@ -12,11 +12,11 @@ from pathlib import Path
 import datetime
 from functools import partial
 
-from cs336_basics.transformer import Transformer_LM
-from cs336_basics.cross_entropy import cross_entropy_loss
-from cs336_basics.perplexity import perplexity
-from cs336_basics.AdamW import AdamW, gradient_clipping
-from cs336_basics.lr_scheduler import lr_cosine_schedule
+from cs336_basics_mine.transformer import Transformer_LM
+from cs336_basics_mine.cross_entropy import cross_entropy_loss
+from cs336_basics_mine.perplexity import perplexity
+from cs336_basics_mine.AdamW import AdamW, gradient_clipping
+from cs336_basics_mine.lr_scheduler import lr_cosine_schedule
 
 def softmax_with_temp(x: Float[torch.Tensor, "..."], dim: int = -1, temperature: float = 1.) -> Float[torch.Tensor, "..."]:
     x /= temperature

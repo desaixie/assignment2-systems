@@ -2,8 +2,8 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float, Int, Bool
 import einops
-from cs336_basics.linear import Linear
-from cs336_basics.RoPE import RoPE
+from cs336_basics_mine.linear import Linear
+from cs336_basics_mine.RoPE import RoPE
 
 def softmax(x: Float[torch.Tensor, "..."], dim=-1) -> Float[torch.Tensor, "..."]:
     maximum = torch.max(x, dim=dim, keepdim=True).values  # e: remember to add the .values, as the function turns a named tuple (values, indices)

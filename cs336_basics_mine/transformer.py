@@ -2,11 +2,11 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float, Int, Bool
 import einops
-from cs336_basics.embedding import Embedding
-from cs336_basics.linear import Linear
-from cs336_basics.RMSNorm import RMSNorm
-from cs336_basics.attention import MultiHeadAttention
-from cs336_basics.FFN_SwiGLU import FFN_SwiGLU
+from cs336_basics_mine.embedding import Embedding
+from cs336_basics_mine.linear import Linear
+from cs336_basics_mine.RMSNorm import RMSNorm
+from cs336_basics_mine.attention import MultiHeadAttention
+from cs336_basics_mine.FFN_SwiGLU import FFN_SwiGLU
 
 """
 resource accounting

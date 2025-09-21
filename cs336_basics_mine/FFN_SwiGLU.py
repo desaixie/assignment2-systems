@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from jaxtyping import Float
-from cs336_basics.linear import Linear
+from cs336_basics_mine.linear import Linear
 
 def find_multiple_64(d_ffn_raw):
     # first find the one larger than and the one smaller than d_ffn_raw. then pick the one closer

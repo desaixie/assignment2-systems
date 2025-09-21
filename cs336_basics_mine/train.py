@@ -16,12 +16,12 @@ import wandb
 from tqdm.auto import tqdm
 import time
 
-from cs336_basics.transformer import Transformer_LM
-from cs336_basics.cross_entropy import cross_entropy_loss
-from cs336_basics.perplexity import perplexity
-from cs336_basics.AdamW import AdamW, gradient_clipping
-from cs336_basics.lr_scheduler import lr_cosine_schedule
-from cs336_basics.simple_tokenizer import Tokenizer
+from cs336_basics_mine.transformer import Transformer_LM
+from cs336_basics_mine.cross_entropy import cross_entropy_loss
+from cs336_basics_mine.perplexity import perplexity
+from cs336_basics_mine.AdamW import AdamW, gradient_clipping
+from cs336_basics_mine.lr_scheduler import lr_cosine_schedule
+from cs336_basics_mine.simple_tokenizer import Tokenizer
 
 def load_data_memmap(file_path, dtype=np.int32):
     """Load data using memory mapping for efficient memory usage."""
