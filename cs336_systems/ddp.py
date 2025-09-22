@@ -1,4 +1,4 @@
-
+import time
 import os
 import argparse
 import torch
@@ -7,13 +7,14 @@ import torch.multiprocessing as mp
 from cs336_basics_mine.transformer import Transformer_LM
 from cs336_basics_mine.AdamW import AdamW
 
-def setup(rank, world_size):
+def setup(rank, world_size, seed):
+    torch.manual_seed(seed)
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = "29500"
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
 def ddp(rank, world_size, args):
-    setup(rank, world_size)
+    setup(rank, world_size, args.seed)
     # scatter data
     if rank == 0:
         data = torch.randint(0, args.vocab_size, (args.batch_size, args.context_length))
@@ -45,13 +46,22 @@ def ddp(rank, world_size, args):
     print(f"before training, rank {rank} param sum: {s}")  # simple way to check params are the same across ranks
 
     # train
+    start_time = time.time()
     for i in range(args.train_steps):
         loss = model(tensor).mean()
         loss.backward()
 
-        for param in model.parameters():  # e: remember to iteratre through params so we can call param.grad
-            dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, async_op=False)
-            param.grad = param.grad / world_size  # e: ReduceOp.AVG not supported in gloo...
+        if args.batched_all_reduce:  # use special functions to batch/unbatch the tensors of different sizes, so we can all_reduce a single tensor, reduce #comm
+            grads = [p.grad for p in model.parameters()]
+            flat_grads = torch._utils._flatten_dense_tensors(grads)
+            dist.all_reduce(flat_grads, op=dist.ReduceOp.SUM, async_op=False)
+            grads = torch._utils._unflatten_dense_tensors(flat_grads, grads)  # use help() to see signature
+            for j, param in enumerate(model.parameters()):
+                param.grad = grads[j] / world_size
+        else:
+            for param in model.parameters():  # e: remember to iteratre through params so we can call param.grad
+                dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, async_op=False)
+                param.grad = param.grad / world_size  # e: ReduceOp.AVG not supported in gloo...
         
         optimizer.step()
         optimizer.zero_grad()
@@ -60,12 +70,17 @@ def ddp(rank, world_size, args):
         for param in model.parameters():
             s += param.sum()
         print(f"before training, step {i} rank {rank} param sum: {s}")
+    print(f"batched_all_reduce: {args.batched_all_reduce}, time used for {args.train_steps} steps: {time.time() - start_time}")  
+    # on M4 mac CPU, 0.1s with batched_all_reduce, 0.3s without.
+    # with same seed, two methods arrive at the same result after 10 steps
     
 
 
 if __name__ == "__main__":
     world_size = 4
     parser = argparse.ArgumentParser()
+    parser.add_argument('--batched_all_reduce', default=False, action='store_true')
+    parser.add_argument('--seed', type=float, default=1)
     # model
     parser.add_argument('--d_model', type=int, default=32)
     parser.add_argument('--num_heads', type=int, default=4)
