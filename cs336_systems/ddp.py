@@ -13,6 +13,48 @@ def setup(rank, world_size, seed):
     os.environ["MASTER_PORT"] = "29500"
     dist.init_process_group("gloo", rank=rank, world_size=world_size)
 
+class DDP(torch.nn.Module):
+    def __init__(self, module: torch.nn.Module):
+        super().__init__()
+        self.module = module
+        self.rank = dist.get_rank()
+        self.world_size = dist.get_world_size()
+        # braodcast initial weights
+        if self.rank == 0:
+            state_dict = [module.state_dict()]
+        else:
+            state_dict = [None]
+        dist.broadcast_object_list(state_dict, src=0)
+        if self.rank != 0:
+            self.module.load_state_dict(state_dict[0])
+    
+        # backward hook
+        self.pending = []
+        def _grad_hook(param: torch.Tensor) -> None:  
+            # only comm grad of the current param tensor
+            grad = param.grad
+            if grad is None:  # e: defensive, might not be needed
+                return
+            handle = dist.all_reduce(grad, op=dist.ReduceOp.SUM, async_op=True)
+            self.pending.append((handle, grad))
+            # param.grad = param.grad / self.world_size  # e: cannot do this with async_op! async requires keeping the same buffer alive until wait() returns
+            # e: thus, solution is to keep grad and assign the grad/world_size after wait()
+            
+        for param in module.parameters():
+            if param.requires_grad:  # e: error without this check
+                param.register_post_accumulate_grad_hook(_grad_hook)
+    
+    def forward(self, *inputs, **kwargs):
+        return self.module.forward(*inputs, **kwargs)
+    
+    def finish_gradient_synchronization(self):
+        for handle, grad in self.pending:
+            handle.wait()
+            grad.div_(self.world_size)  # divide in place (all_reduce is also in-place, so grad still refers to the correct param.grad)
+        self.pending.clear()
+
+
+"""standalone function version"""
 def ddp(rank, world_size, args):
     setup(rank, world_size, args.seed)
     # scatter data
@@ -28,57 +70,85 @@ def ddp(rank, world_size, args):
 
     model = Transformer_LM(args.d_model, args.num_heads, args.d_ff, args.vocab_size, args.context_length, args.num_layers, args.theta, args.context_length, args.device, args.model_dtype)
 
-    # sync initial weights
-    if rank == 0:
-        state_dict = [model.state_dict()]  # e: broadcast_object_list expects lists of the same size, so wrap state_dict in a list of 1 element to ensure this
+    if args.ddp_wrapper_class:
+        ddp_model = DDP(model)  # wrap
+        optimizer = AdamW(ddp_model.module.parameters(), 0.1, (args.beta1, args.beta2), args.eps, args.weight_decay)
+
+        s = 0
+        for param in ddp_model.module.parameters():
+            s += param.sum()
+        print(f"before training, rank {rank} param sum: {s}")  # simple way to check params are the same across ranks
+
+        start_time = time.time()
+        for i in range(args.train_steps):
+            loss = ddp_model(tensor).mean()
+            loss.backward()
+            
+            ddp_model.finish_gradient_synchronization()
+
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            s = 0
+            for param in ddp_model.module.parameters():
+                s += param.sum()
+            print(f"after training, step {i} rank {rank} param sum: {s}")
+        print(f"using ddp_wrapper, time used for {args.train_steps} steps: {time.time() - start_time}")  
+        # 0.27s, slower than batched_all_reduce.
+        # ChatGPT: this is because on gloo, both comm and compute fight for the same resource, thus overlapping doesn't help much while batching helps a lot. Use bucketed overlapping to enjoy benefits of both.
     else:
-        state_dict = [None]
-    dist.broadcast_object_list(state_dict, src=0)  # e: broadcast only takes a tensor. this works for a dict
-    if rank != 0:
-        model.load_state_dict(state_dict[0])
-
-
-    optimizer = AdamW(model.parameters(), 0.1, (args.beta1, args.beta2), args.eps, args.weight_decay)
-
-    s = 0
-    for param in model.parameters():
-        s += param.sum()
-    print(f"before training, rank {rank} param sum: {s}")  # simple way to check params are the same across ranks
-
-    # train
-    start_time = time.time()
-    for i in range(args.train_steps):
-        loss = model(tensor).mean()
-        loss.backward()
-
-        if args.batched_all_reduce:  # use special functions to batch/unbatch the tensors of different sizes, so we can all_reduce a single tensor, reduce #comm
-            grads = [p.grad for p in model.parameters()]
-            flat_grads = torch._utils._flatten_dense_tensors(grads)
-            dist.all_reduce(flat_grads, op=dist.ReduceOp.SUM, async_op=False)
-            grads = torch._utils._unflatten_dense_tensors(flat_grads, grads)  # use help() to see signature
-            for j, param in enumerate(model.parameters()):
-                param.grad = grads[j] / world_size
+        # sync initial weights
+        if rank == 0:
+            state_dict = [model.state_dict()]  # e: broadcast_object_list expects lists of the same size, so wrap state_dict in a list of 1 element to ensure this
         else:
-            for param in model.parameters():  # e: remember to iteratre through params so we can call param.grad
-                dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, async_op=False)
-                param.grad = param.grad / world_size  # e: ReduceOp.AVG not supported in gloo...
-        
-        optimizer.step()
-        optimizer.zero_grad()
-        
+            state_dict = [None]
+        dist.broadcast_object_list(state_dict, src=0)  # e: broadcast only takes a tensor. this works for a dict
+        if rank != 0:
+            model.load_state_dict(state_dict[0])
+
+
+        optimizer = AdamW(model.parameters(), 0.1, (args.beta1, args.beta2), args.eps, args.weight_decay)
+
         s = 0
         for param in model.parameters():
             s += param.sum()
-        print(f"before training, step {i} rank {rank} param sum: {s}")
-    print(f"batched_all_reduce: {args.batched_all_reduce}, time used for {args.train_steps} steps: {time.time() - start_time}")  
-    # on M4 mac CPU, 0.1s with batched_all_reduce, 0.3s without.
+        print(f"before training, rank {rank} param sum: {s}")  # simple way to check params are the same across ranks
+
+        # train
+        start_time = time.time()
+        for i in range(args.train_steps):
+            loss = model(tensor).mean()
+            loss.backward()
+
+            if args.batched_all_reduce:  # use special functions to batch/unbatch the tensors of different sizes, so we can all_reduce a single tensor, reduce #comm
+                grads = [p.grad for p in model.parameters()]
+                flat_grads = torch._utils._flatten_dense_tensors(grads)
+                dist.all_reduce(flat_grads, op=dist.ReduceOp.SUM, async_op=False)
+                grads = torch._utils._unflatten_dense_tensors(flat_grads, grads)  # use help() to see signature
+                for j, param in enumerate(model.parameters()):
+                    param.grad = grads[j] / world_size
+            else:
+                for param in model.parameters():  # e: remember to iteratre through params so we can call param.grad
+                    dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, async_op=False)
+                    param.grad = param.grad / world_size  # e: ReduceOp.AVG not supported in gloo...
+            
+            optimizer.step()
+            optimizer.zero_grad()
+            
+            s = 0
+            for param in model.parameters():
+                s += param.sum()
+            print(f"after training, step {i} rank {rank} param sum: {s}")
+        print(f"batched_all_reduce: {args.batched_all_reduce}, time used for {args.train_steps} steps: {time.time() - start_time}")  
+        # on M4 mac CPU, 0.1s with batched_all_reduce, 0.3s without.
     # with same seed, two methods arrive at the same result after 10 steps
     
 
 
 if __name__ == "__main__":
-    world_size = 4
+    world_size = 4  # setting to 1 to check non-ddp result
     parser = argparse.ArgumentParser()
+    parser.add_argument('--ddp_wrapper_class', default=False, action='store_true')
     parser.add_argument('--batched_all_reduce', default=False, action='store_true')
     parser.add_argument('--seed', type=float, default=1)
     # model
