@@ -4,6 +4,7 @@ from typing import Type
 
 import torch
 from cs336_systems.ddp import DDP
+from cs336_systems.optimizer_state_sharding import OptimizerStateSharding
 
 
 
@@ -138,4 +139,4 @@ def get_sharded_optimizer(params, optimizer_cls: Type[torch.optim.Optimizer], **
     Returns:
         Instance of sharded optimizer.
     """
-    raise NotImplementedError
+    return OptimizerStateSharding(params, optimizer_cls, **kwargs)  # e: forgot about writing **kwargs here costed me a whole day to debug...

@@ -42,22 +42,28 @@ def _test_sharded_optimizer(rank: int, world_size: int, model_class: Type[torch.
         eps=1e-8,
     )
     sharded_model = deepcopy(non_sharded_model)
+    # ordered_names = [name for name, _ in sharded_model.named_parameters()]
+    # print(f"rank: {rank}, names: {ordered_names}")
     sharded_optimizer = get_sharded_optimizer(
         sharded_model.parameters(),
         optimizer_cls,
+        # sharded_model.named_parameters(),
         lr=0.1,
         weight_decay=0.1,
         betas=(0.9, 0.999),
         eps=1e-8,
     )
 
-    for _ in range(10):
+    # print(f"before training, rank {rank}, non-sharded params sum {sum([p.data.sum() for p in non_sharded_model.parameters()])}, sharded params sum {sum([p.data.sum() for p in sharded_model.parameters()])}")
+    for i in range(10):
         non_sharded_optimizer.zero_grad()
         sharded_optimizer.zero_grad()
+        # sharded_model.zero_grad()
 
         # batch size 32, 10 input features, 5 output features
         input_ = torch.rand((32, 10)).to(device)
         labels = torch.rand((32, 5)).to(device)
+        # print(f"rank {rank} input_ sum {input_.sum()} labels sum {labels.sum()}")
         non_sharded_input = deepcopy(input_)
         sharded_input = deepcopy(input_)
         non_sharded_labels = deepcopy(labels)
@@ -74,6 +80,8 @@ def _test_sharded_optimizer(rank: int, world_size: int, model_class: Type[torch.
 
         non_sharded_optimizer.step()
         sharded_optimizer.step()
+        # print(f"after step {i} rank {rank}, non-sharded grads sum {sum([p.grad.sum() for p in non_sharded_model.parameters() if p.grad is not None])}, sharded grads sum {sum([p.grad.sum() for p in sharded_model.parameters() if p.grad is not None])}")
+        # print(f"after step {i} rank {rank}, non-sharded params sum {sum([p.data.sum() for p in non_sharded_model.parameters()])}, sharded params sum {sum([p.data.sum() for p in sharded_model.parameters()])}")
 
     # Check that the final model weights are the same regardless of if we're using
     # the sharded or non-sharded optimizer.
